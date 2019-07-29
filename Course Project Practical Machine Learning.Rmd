@@ -1,0 +1,198 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Charles Rey E. Diomampo"
+output:
+  html_document:
+    df_print: paged
+---
+
+## EXECUTIVE SUMMARY
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+  - How the model was built  
+    The model was built by trying three different models and choosing the one with the highest accuracy (decision tree, random forest, and gradient boosting machine).
+    
+  - How cross-validation is used  
+    Cross-validation is used depending on the model as some have built-in function to do cross-validation.
+    
+  - What the expected out of sample error is  
+    The expected out of sample error is depending on the model with the highest accuracy since we want to maximize accuracy while minimizing out of sample error.
+  
+  - Why made the choices made  
+    The choices made are depending on the lectures and thus are expected to be accomplished.
+
+
+### Library Load
+```{r library_load,results='hide', comment=NA, warning=FALSE, message=FALSE}
+library(dplyr)
+library(caret)
+library(knitr)
+library(randomForest)
+library(rpart)
+library(RColorBrewer)
+library(rattle)
+library(rpart.plot)
+library(gbm)
+library(ggplot2)
+library(rfUtilities)
+```
+
+```{r set_cache, echo = FALSE}
+#opts_chunk$set(cache = TRUE)
+```
+
+Set the working directory for this activity. Please note that this will vary depending on the user's device.  
+The training and testing dataset are also loaded.
+
+```{r libray_and_wd_setup}
+setwd("C:/Users/10012223/Desktop/Coursera Videos/08 Practical Machine Learning/Week 4/Course Project")
+
+# Read the csv files for the training and testing set.
+
+training = read.csv("pml-training.csv")
+testing = read.csv("pml-testing.csv")
+
+```
+
+### Data Cleaning and Pre-processing
+
+Remove the columns that contain null values so as to get accurate results since missing values will affect the output.  
+Read only the columns that have no missing values in it.
+
+```{r remove_NA}
+na_count <- sapply(testing, function(y) sum((is.na(y))))
+na_values <- na_count[na_count != 0]
+to_remove <- names(na_values)
+
+training <- training[,!(names(training) %in% to_remove)]
+testing <- testing[,!(names(testing) %in% to_remove)]
+```
+
+### Partitioning the Data
+
+Divide the `training` into sub-parts: sub_train and sub_validate to be used to measure the performance of the model to be used. This could also find if the model are overfitting and/or underfitting.  
+Set the seed for the reproducibility of the project.
+
+```{r partitioning_training}
+inTrain = createDataPartition(y = training$classe, p = 0.8, list = FALSE)
+sub_train = training[inTrain, ] %>% select(-c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+sub_validate = training[-inTrain, ] %>% select(-c(X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window, num_window))
+set.seed(12)
+```
+
+### DECISION TREE
+
+Using classification tree (decision tree) as our first model to be trained.
+
+```{r dt_model, cache = TRUE}
+classtree_model <- train(classe ~ ., data = sub_train, method="rpart")
+print(classtree_model, digits=3)
+```
+
+Using the model trained, fit the validate set to check the performance of the model. See also that the model is not overfit or underfit. Otherwise, the model will not be good, and will therefore be rejected.
+
+```{r predict_validate}
+ct_predicted_validate <- predict(classtree_model, newdata=sub_validate)
+conf_ct = confusionMatrix(ct_predicted_validate, sub_validate$classe)
+print(conf_ct, digits=4)
+```
+
+Note that the accuracy of this model is `r conf_ct$overall[1]`
+
+#### Cross Validation and Classification Tree
+
+```{r cv_dt, cache = TRUE}
+form <- "classe ~ ."
+folds <- split(sub_train, cut(sample(1:nrow(sub_train)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+  test <- plyr::ldply(folds[i], data.frame) %>% select(-.id)
+  train <- plyr::ldply(folds[-i], data.frame) %>% select(-.id)
+  tmp.model <- train(classe ~., train, method = "rpart")
+  tmp.predict <- predict(tmp.model, newdata = test, type = "prob")
+  tmp.predict$response = colnames(tmp.predict)[apply(tmp.predict, 1, which.max)] %>% as.factor()
+  conf.mat <- table(test$classe, tmp.predict$response)
+  errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+
+print(sprintf("average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+
+### RANDOM FOREST
+
+Now, use a more complex model, which is Random Forest.
+
+```{r rf_model, cache=TRUE}
+rf_model <- randomForest(classe ~ ., data = sub_train, importance = TRUE)
+```
+
+```{r validate_rf}
+rf_predicted_validate <- predict(rf_model, newdata = sub_validate)
+conf_rf = confusionMatrix(rf_predicted_validate, sub_validate$classe)
+print(conf_rf, digits=4)
+```
+
+Note that the accuracy of this random forest model is `r conf_rf$overall[1]`.
+
+```{r rf_praise, echo = TRUE,comment = NA}
+if (conf_rf$overall[1]  > 0.99) print("This accuracy is almost 1, which means that the model is better than the previous model.")
+```
+
+#### Cross Validation and Random Forest
+
+```{r cv_rf, cache = TRUE}
+rf_cv = rf.crossValidation(rf_model, sub_train, trace = TRUE, n = 10)
+```
+
+```{r}
+rf_cv
+```
+
+The cross validation out of bag error is 0.
+
+### GRADIENT BOOSTING MACHINE
+
+Lastly, use Gradient Boosting Machine
+
+```{r gbm_model, cache = TRUE}
+gbm_model = gbm(classe ~ ., data = sub_train, distribution = "multinomial", cv.folds = 10)
+```
+
+```{r}
+gbm_validate = predict(gbm_model, sub_validate, n.trees = 10, type = "response")
+gbm_validate <- data.frame(gbm_validate)
+colnames(gbm_validate) <- c("A", "B", "C", "D", "E")
+gbm_validate$response <- colnames(gbm_validate)[apply(gbm_validate, 1, which.max)] %>% as.factor()
+conf_gbm = confusionMatrix(gbm_validate$response, sub_validate$classe)
+print(conf_gbm, digits = 4)
+```
+
+Note that the accuracy of this gradient boost machine model is `r conf_gbm$overall[1]`.
+
+### CONCLUSION
+Upon comparing these three models, we can see that the Random Forest is the best model with accuracy of `r paste0(conf_rf$overall[1] * 100, "%")`.  
+
+```{r digits,echo=FALSE}
+options(scipen = 999)
+```
+
+```{r outofsampleerror}
+accur <- postResample(sub_validate$classe, rf_predicted_validate)
+modAccuracy <- accur[[1]]
+```
+
+The out of sample error is `r 1 - modAccuracy`.
+
+
+
+
+### Application of the Result to the 20 test cases provided
+
+```{r}
+pred_final <- predict(rf_model, testing)
+pred_final
+```
+
+This is the test output of the model.
